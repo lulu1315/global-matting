@@ -1,4 +1,8 @@
 #include "globalmatting.h"
+#include <omp.h>
+#include <iostream>
+#include <fstream>
+using namespace std;
 
 template <typename T>
 static inline T sqr(T a)
@@ -9,7 +13,6 @@ static inline T sqr(T a)
 static std::vector<cv::Point> findBoundaryPixels(const cv::Mat_<uchar> &trimap, int a, int b)
 {
     std::vector<cv::Point> result;
-
     for (int x = 1; x < trimap.cols - 1; ++x)
         for (int y = 1; y < trimap.rows - 1; ++y)
         {
@@ -82,6 +85,7 @@ static float colorDist(const cv::Vec3b &I0, const cv::Vec3b &I1)
 static float nearestDistance(const std::vector<cv::Point> &boundary, const cv::Point &p)
 {
     int minDist2 = INT_MAX;
+#pragma omp parallel for
     for (std::size_t i = 0; i < boundary.size(); ++i)
     {
         int dist2 = sqr(boundary[i].x - p.x)  + sqr(boundary[i].y - p.y);
@@ -117,7 +121,7 @@ static void expansionOfKnownRegions(const cv::Mat_<cv::Vec3b> &image,
 {
     int w = image.cols;
     int h = image.rows;
-
+#pragma omp parallel for
     for (int x = 0; x < w; ++x)
         for (int y = 0; y < h; ++y)
         {
@@ -149,7 +153,7 @@ static void expansionOfKnownRegions(const cv::Mat_<cv::Vec3b> &image,
                     }
                 }
         }
-
+#pragma omp parallel for        
     for (int x = 0; x < trimap.cols; ++x)
         for (int y = 0; y < trimap.rows; ++y)
         {
@@ -211,7 +215,8 @@ static void calculateAlphaPatchMatch(const cv::Mat_<cv::Vec3b> &image,
     int h = image.rows;
 
     samples.resize(h, std::vector<Sample>(w));
-
+    int64 start = cv::getTickCount();
+#pragma omp parallel for
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
         {
@@ -226,17 +231,23 @@ static void calculateAlphaPatchMatch(const cv::Mat_<cv::Vec3b> &image,
                 samples[y][x].cost = FLT_MAX;
             }
         }
-
+    double timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+    cout << "       step1 : " << timeSec << " sec" << endl;
     std::vector<cv::Point> coords(w * h);
+    start = cv::getTickCount();
+#pragma omp parallel for
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
             coords[x + y * w] = cv::Point(x, y);
-
+    timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+    cout << "       step2 : " << timeSec << " sec" << endl;
+    start = cv::getTickCount();
+#pragma omp parallel for
     for (int iter = 0; iter < 10; ++iter)
     {
         // propagation
         std::random_shuffle(coords.begin(), coords.end());
-
+#pragma omp parallel for
         for (std::size_t i = 0; i < coords.size(); ++i)
         {
             const cv::Point &p = coords[i];
@@ -250,7 +261,7 @@ static void calculateAlphaPatchMatch(const cv::Mat_<cv::Vec3b> &image,
             const cv::Vec3b &I = image(y, x);
 
             Sample &s = samples[y][x];
-
+#pragma omp parallel for
             for (int y2 = y - 1; y2 <= y + 1; ++y2)
                 for (int x2 = x - 1; x2 <= x + 1; ++x2)
                 {
@@ -281,11 +292,11 @@ static void calculateAlphaPatchMatch(const cv::Mat_<cv::Vec3b> &image,
                     }
                 }
         }
-
         // random walk
         int w2 = (int)std::max(foregroundBoundary.size(), backgroundBoundary.size());
-
+#pragma omp parallel for
         for (int y = 0; y < h; ++y)
+#pragma omp parallel for
             for (int x = 0; x < w; ++x)
             {
                 if (trimap(y, x) != 128)
@@ -333,6 +344,8 @@ static void calculateAlphaPatchMatch(const cv::Mat_<cv::Vec3b> &image,
                 }
             }
     }
+    timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+    cout << "       step3 : " << timeSec << " sec" << endl;
 }
 
 static void expansionOfKnownRegionsHelper(const cv::Mat &_image,
@@ -344,7 +357,7 @@ static void expansionOfKnownRegionsHelper(const cv::Mat &_image,
 
     int w = image.cols;
     int h = image.rows;
-
+#pragma omp parallel for
     for (int x = 0; x < w; ++x)
         for (int y = 0; y < h; ++y)
         {
@@ -376,7 +389,7 @@ static void expansionOfKnownRegionsHelper(const cv::Mat &_image,
                     }
                 }
         }
-
+#pragma omp parallel for
     for (int x = 0; x < trimap.cols; ++x)
         for (int y = 0; y < trimap.rows; ++y)
         {
@@ -453,7 +466,8 @@ static void globalMattingHelper(cv::Mat _image, cv::Mat _trimap, cv::Mat &_foreg
 
     std::vector<cv::Point> foregroundBoundary = findBoundaryPixels(trimap, 255, 128);
     std::vector<cv::Point> backgroundBoundary = findBoundaryPixels(trimap, 0, 128);
-
+    
+    int64 start = cv::getTickCount();
     int n = (int)(foregroundBoundary.size() + backgroundBoundary.size());
     for (int i = 0; i < n; ++i)
     {
@@ -465,13 +479,18 @@ static void globalMattingHelper(cv::Mat _image, cv::Mat _trimap, cv::Mat &_foreg
         else if (trimap(y, x) == 255)
             foregroundBoundary.push_back(cv::Point(x, y));
     }
-
+    double timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+    cout << "   Boundary : " << timeSec << " sec" << endl;
+    
     std::sort(foregroundBoundary.begin(), foregroundBoundary.end(), IntensityComp(image));
     std::sort(backgroundBoundary.begin(), backgroundBoundary.end(), IntensityComp(image));
 
     std::vector<std::vector<Sample> > samples;
+    start = cv::getTickCount();
     calculateAlphaPatchMatch(image, trimap, foregroundBoundary, backgroundBoundary, samples);
-
+    timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+    cout << "   AlphaPatchMatch : " << timeSec << " sec" << endl;
+    
     _foreground.create(image.size(), CV_8UC3);
     _alpha.create(image.size(), CV_8UC1);
     _conf.create(image.size(), CV_8UC1);
@@ -479,7 +498,8 @@ static void globalMattingHelper(cv::Mat _image, cv::Mat _trimap, cv::Mat &_foreg
     cv::Mat_<cv::Vec3b> &foreground = (cv::Mat_<cv::Vec3b>&)_foreground;
     cv::Mat_<uchar> &alpha = (cv::Mat_<uchar>&)_alpha;
     cv::Mat_<uchar> &conf = (cv::Mat_<uchar>&)_conf;
-
+    start = cv::getTickCount();
+#pragma omp parallel for
     for (int y = 0; y < alpha.rows; ++y)
         for (int x = 0; x < alpha.cols; ++x)
         {
@@ -505,6 +525,8 @@ static void globalMattingHelper(cv::Mat _image, cv::Mat _trimap, cv::Mat &_foreg
                     break;
             }
         }
+    timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+    cout << "   finalize : " << timeSec << " sec" << endl;
 }
 
 void globalMatting(cv::InputArray _image, cv::InputArray _trimap, cv::OutputArray _foreground, cv::OutputArray _alpha, cv::OutputArray _conf)

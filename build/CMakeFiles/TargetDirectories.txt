@@ -1,0 +1,3 @@
+/shared/foss/global-matting/build/CMakeFiles/rebuild_cache.dir
+/shared/foss/global-matting/build/CMakeFiles/globalmatting.dir
+/shared/foss/global-matting/build/CMakeFiles/edit_cache.dir
